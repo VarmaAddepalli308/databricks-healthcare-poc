@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 04 · Feature engineering & Feature Store (Unity Catalog)
 # MAGIC
@@ -12,7 +16,14 @@
 # MAGIC training-base table, optional online-store publishing.
 
 # COMMAND ----------
+
 # MAGIC %run ./00_config
+
+# COMMAND ----------
+
+# DBTITLE 1,Install feature engineering library
+# MAGIC %pip install databricks-feature-engineering
+# MAGIC dbutils.library.restartPython()  # required for the newly installed package to be importable
 
 # COMMAND ----------
 
@@ -28,6 +39,7 @@ patients = spark.table(T["silver_patients"])
 labs = spark.table(T["silver_labs"])
 
 # COMMAND ----------
+
 # MAGIC %md ## 1. Patient-history features (window aggregates, strictly *prior* encounters)
 
 # COMMAND ----------
@@ -37,6 +49,7 @@ print("feature rows:", hist_df.count())
 display(hist_df.orderBy("patient_id", "event_ts").limit(10))
 
 # COMMAND ----------
+
 # MAGIC %md ## 2. Leakage / point-in-time test (fail the pipeline if violated)
 # MAGIC Re-compute `prior_admits_365d` with an independent self-join and compare. Also: the first-ever encounter of
 # MAGIC every patient must have zero history.
@@ -59,6 +72,7 @@ assert first_enc_bad == 0, "first encounter has non-zero history -> leakage"
 print("PIT tests passed")
 
 # COMMAND ----------
+
 # MAGIC %md ## 3. Create / update the Unity Catalog feature table
 # MAGIC * primary key `(patient_id, event_ts)` + `timeseries_columns` → enables `FeatureLookup(timestamp_lookup_key=...)` point-in-time joins
 # MAGIC * `merge` mode makes re-runs idempotent and supports incremental refresh
@@ -79,6 +93,7 @@ except Exception:
 spark.sql(f"ALTER TABLE {ft_name} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")  # required for online sync
 
 # COMMAND ----------
+
 # MAGIC %md ## 4. On-demand feature as a Unity Catalog Python function
 # MAGIC Same code runs in training, batch scoring and real-time serving → no training/serving skew.
 
@@ -98,6 +113,7 @@ $$
 print(spark.sql(f"SELECT {FQ}.{ON_DEMAND_UDF}(10000.0, 4) AS v").first()["v"])
 
 # COMMAND ----------
+
 # MAGIC %md ## 5. Training base table = encounter features + label (feature-table values are joined later, point-in-time)
 
 # COMMAND ----------
@@ -112,6 +128,7 @@ spark.sql(f"COMMENT ON TABLE {T['training_base']} IS 'Labelled encounter-level f
 print("training base rows:", spark.table(T["training_base"]).count())
 
 # COMMAND ----------
+
 # MAGIC %md ## 6. Feature validation (ranges, nulls, constants)
 
 # COMMAND ----------
@@ -125,6 +142,7 @@ assert stats["los_min"] >= 1 and stats["charges_min"] >= 0
 assert max(v for k, v in stats.items() if k.endswith("null_pct")) < 5, "lab null rate too high"
 
 # COMMAND ----------
+
 # MAGIC %md ## 7. Feature selection: correlation (redundancy) + mutual information (relevance)
 # MAGIC Sampled to the driver. Decision rule: drop one of any pair with |ρ| > 0.95; keep features with MI > 0.
 
@@ -145,6 +163,7 @@ mi = pd.Series(mutual_info_classif(X.fillna(X.median()), j[LABEL], random_state=
 display(mi.reset_index().rename(columns={"index": "feature", 0: "mutual_information"}))
 
 # COMMAND ----------
+
 # MAGIC %md ## 8. (Optional) Online feature store for low-latency lookups
 # MAGIC Needed only if the serving endpoint should *look up* history features by `patient_id`.
 # MAGIC The online-store APIs have been evolving (Online Tables → Lakebase-based online feature store) - **verify against

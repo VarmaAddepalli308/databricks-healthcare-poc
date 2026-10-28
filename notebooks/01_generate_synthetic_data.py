@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 01 · Generate synthetic healthcare data (1,000,000 encounters)
 # MAGIC **Use case:** predict whether a discharged inpatient will be **readmitted within 30 days**, so care
@@ -15,6 +19,7 @@
 # MAGIC simulated from a clinically-plausible risk model so the ML has real signal to learn.
 
 # COMMAND ----------
+
 # MAGIC %run ./00_config
 
 # COMMAND ----------
@@ -47,6 +52,7 @@ pat_raw = synth.inject_dirty_patients(patients.withColumn("dob", F.col("dob")))
 (labels.repartition(4).write.mode("overwrite").parquet(f"{RAW}/labels/initial"))
 
 # COMMAND ----------
+
 # MAGIC %md ### Sanity checks on the generated data
 
 # COMMAND ----------

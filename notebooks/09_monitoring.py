@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 09 · Production monitoring: data drift, model performance, data quality, operations, alerts
 # MAGIC
@@ -16,6 +20,7 @@
 # MAGIC kidney function) to watch the monitoring fire.
 
 # COMMAND ----------
+
 # MAGIC %run ./00_config
 
 # COMMAND ----------
@@ -31,6 +36,7 @@ dbutils.widgets.dropdown("simulate_drift", "false", ["false", "true"])
 dbutils.widgets.text("drift_strength", "1.0")
 
 # COMMAND ----------
+
 # MAGIC %md ## 0. (Optional) Simulate a drifted new month of data and run the pipeline end-to-end
 # MAGIC Lands January-2025 data into the **same** landing folders; Auto Loader picks up only the new files.
 
@@ -58,6 +64,7 @@ if dbutils.widgets.get("simulate_drift") == "true":
                                         "as_of_ts": "2025-04-15 00:00:00"})
 
 # COMMAND ----------
+
 # MAGIC %md ## 1. Feature & prediction drift (PSI) - baseline vs the most recent scoring window
 
 # COMMAND ----------
@@ -92,6 +99,7 @@ n_crit, n_warn = int((drift.status == "CRITICAL").sum()), int((drift.status == "
 print(f"CRITICAL={n_crit}  WARNING={n_warn}")
 
 # COMMAND ----------
+
 # MAGIC %md ## 2. Ground-truth back-fill & real performance
 # MAGIC Labels become available 30 days after discharge. We MERGE matured labels into the inference log, then compute
 # MAGIC performance **only on rows with labels** and compare with the offline test metrics (baseline table).
@@ -126,6 +134,7 @@ perf_degraded = bool(len(perf) and (base_auroc - perf.auroc.tail(4).mean()) > 0.
 print(f"baseline AUROC={base_auroc:.3f}  recent labelled mean={perf.auroc.tail(4).mean() if len(perf) else float('nan'):.3f}  degraded={perf_degraded}")
 
 # COMMAND ----------
+
 # MAGIC %md ## 3. Lakehouse Monitoring (InferenceLog profile) - managed profile/drift tables + auto-generated dashboard
 
 # COMMAND ----------
@@ -156,6 +165,7 @@ except Exception as e:      # SDK surface for monitoring is evolving - see docs 
     print("Lakehouse Monitoring step skipped:", str(e)[:200])
 
 # COMMAND ----------
+
 # MAGIC %md ## 4. Alert queries (create as Databricks SQL Alerts → email/Slack/PagerDuty)
 # MAGIC ```sql
 # MAGIC -- A) any CRITICAL feature drift in the last day
@@ -169,6 +179,7 @@ except Exception as e:      # SDK surface for monitoring is evolving - see docs 
 # MAGIC ```
 
 # COMMAND ----------
+
 # MAGIC %md ## 5. Decision output for the orchestrator
 
 # COMMAND ----------

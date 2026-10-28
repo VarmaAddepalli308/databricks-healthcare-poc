@@ -19,8 +19,13 @@ def to_inference_log(scored: DataFrame, model_name: str, version, thr_high: floa
                      with_label: bool = False) -> DataFrame:
     """Normalise the output of fe.score_batch into the schema used for monitoring.
 
-    fe.score_batch on a model logged with pyfunc_predict_fn="predict_proba" returns an
-    array<double> [p0, p1]; if a plain float comes back we use it directly.
+    IMPORTANT: fe.score_batch on a model logged with pyfunc_predict_fn="predict_proba"
+    only returns the full array<double> [p0, p1] when called with
+    result_type="array<double>". WITHOUT it, the (n, 2) output collapses to a
+    scalar = p0, the NEGATIVE-class probability - silently inverting every
+    downstream metric. Always pass result_type="array<double>" for binary
+    predict_proba models. The plain-float fallback below is only for models
+    that already return the positive-class probability as a scalar.
     """
     is_arr = isinstance(scored.schema["prediction"].dataType, T.ArrayType)
     p = F.col("prediction")[1] if is_arr else F.col("prediction").cast("double")

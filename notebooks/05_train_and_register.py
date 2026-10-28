@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 05 · Model training, tuning, evaluation, explainability, fairness, registration
 # MAGIC
@@ -7,13 +11,16 @@
 # MAGIC SHAP, fairness (Fairlearn) → log + register to **Unity Catalog** → alias `Challenger`.
 
 # COMMAND ----------
-# MAGIC %pip install optuna fairlearn shap lightgbm --quiet
+
+# DBTITLE 1,Cell 2
+# MAGIC %pip install optuna fairlearn shap lightgbm databricks-feature-engineering --quiet
 
 # COMMAND ----------
 
 dbutils.library.restartPython()
 
 # COMMAND ----------
+
 # MAGIC %run ./00_config
 
 # COMMAND ----------
@@ -44,6 +51,7 @@ client = MlflowClient()
 SEED = 42
 
 # COMMAND ----------
+
 # MAGIC %md ## 1. Build the point-in-time training set
 # MAGIC Two views of the same data: `ts_log` (exact model input, ids excluded - this object is what gets packaged with the model)
 # MAGIC and `ts_full` (keeps ids so we can split by time and join audit attributes).
@@ -93,6 +101,7 @@ def metrics_for(y, p, prefix):
             f"{prefix}_lift_top10": k["lift"], f"{prefix}_prevalence": float(np.mean(y))}
 
 # COMMAND ----------
+
 # MAGIC %md ## 2. Baseline: regularised logistic regression
 # MAGIC Every ML project needs a simple, interpretable benchmark. If LightGBM can't beat it clearly, ship the simple model.
 
@@ -107,12 +116,14 @@ with mlflow.start_run(run_name="baseline_logreg"):
 baseline_auprc = m["val_auprc"]
 
 # COMMAND ----------
+
 # MAGIC %md ## 3. LightGBM + Optuna hyper-parameter search (each trial = nested MLflow run)
 # MAGIC Objective = validation **AUPRC** (right metric for a ~15% positive class). Early stopping on the validation fold.
 # MAGIC `pos_weight` > 1 trades calibration for recall - we check calibration afterwards.
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 11
 pre = make_pre(scale=False)
 Xtr_t = pre.fit_transform(X_tr); Xva_t = pre.transform(X_va); Xte_t = pre.transform(X_te)
 
@@ -189,6 +200,7 @@ with mlflow.start_run(run_name="lgbm_hpo_and_final") as parent:
     te2 = te.copy(); te2["pred"] = (p_te >= thr_high).astype(int)
     fair = {}
     for attr in ["gender", "race_ethnicity", "insurance_type", "age_band"]:
+        te2[attr] = te2[attr].fillna("Unknown")   # a few encounters have no match in silver_patients; Fairlearn rejects missing sensitive features
         mf = MetricFrame(metrics={"selection_rate": selection_rate, "tpr": true_positive_rate, "fpr": false_positive_rate,
                                   "precision": lambda y, p: precision_score(y, p, zero_division=0)},
                          y_true=te2[LABEL], y_pred=te2["pred"], sensitive_features=te2[attr])
@@ -214,10 +226,12 @@ with mlflow.start_run(run_name="lgbm_hpo_and_final") as parent:
                              registered_model_name=PAYLOAD_MODEL_NAME, pyfunc_predict_fn="predict_proba")
 
 # COMMAND ----------
+
 # MAGIC %md ## 4. Registry: description, tags, alias `Challenger` (promotion to `Champion` happens in notebook 06)
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 13
 def version_for_run(name, rid):
     return max((v for v in client.search_model_versions(f"name='{name}'") if v.run_id == rid), key=lambda v: int(v.version))
 
@@ -226,10 +240,11 @@ for name in (MODEL_NAME, PAYLOAD_MODEL_NAME):
     client.update_model_version(name, mv.version, description=(
         f"LightGBM 30-day readmission risk. Trained on encounters < {TRAIN_END}, validated < {VAL_END}. "
         f"Test AUROC={all_metrics['test_auroc']:.3f}, AUPRC={all_metrics['test_auprc']:.3f}, "
-        f"precision@top10%={all_metrics['test_precision_top10']:.3f}. Not for diagnosis; decision-support only."))
+        f"precision@top10%={all_metrics['test_precision_top10']:.3f}. Not for diagnosis; decision-support only.\n"
+        f"Feature columns ({len(feature_cols)}): {', '.join(feature_cols)}."))  # full list goes here: model-version tag values are capped at 256 chars
     for k, v in {"decision_threshold": thr_high, "medium_threshold": thr_med, "validation_status": "PENDING",
                  "git_sha": GIT_SHA, "test_auprc": round(all_metrics["test_auprc"], 4),
-                 "feature_columns": json.dumps(feature_cols)}.items():
+                 "n_features": len(feature_cols)}.items():
         client.set_model_version_tag(name, mv.version, k, str(v))
     client.set_registered_model_alias(name, "Challenger", mv.version)
     print(f"{name} v{mv.version} -> alias Challenger")
@@ -237,6 +252,7 @@ for name in (MODEL_NAME, PAYLOAD_MODEL_NAME):
 dbutils.jobs.taskValues.set("run_id", run_id) if "dbutils" in globals() else None
 
 # COMMAND ----------
+
 # MAGIC %md ## 5. (Optional) AutoML benchmark
 # MAGIC Quick sanity check that hand-tuned LightGBM isn't leaving large gains on the table. Generates editable notebooks.
 

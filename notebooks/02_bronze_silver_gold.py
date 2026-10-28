@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 02 · Medallion pipeline: ingestion → data quality → PHI protection → gold
 # MAGIC
@@ -13,6 +17,7 @@
 # MAGIC HIPAA de-identification (Safe-Harbor style), column masks, tags, liquid clustering, OPTIMIZE/ANALYZE, CDF.
 
 # COMMAND ----------
+
 # MAGIC %run ./00_config
 
 # COMMAND ----------
@@ -23,6 +28,7 @@ from poc_lib.dq import (ENCOUNTER_RULES, LAB_RULES, PATIENT_RULES, LABEL_RULES,
                         split_by_rules, rule_failure_counts)
 
 # COMMAND ----------
+
 # MAGIC %md ## 1. Bronze - Auto Loader (incremental & idempotent)
 # MAGIC `availableNow` trigger = process everything new, then stop (batch economics, streaming semantics).
 # MAGIC Re-running never re-ingests the same file (checkpoint). New columns are picked up via schema evolution.
@@ -51,6 +57,7 @@ ingest_bronze("labs", "parquet")
 ingest_bronze("labels", "parquet")
 
 # COMMAND ----------
+
 # MAGIC %md ## 2. Silver - typing, dedupe, DQ rules, quarantine
 
 # COMMAND ----------
@@ -108,6 +115,7 @@ valid_l, bad_l = split_by_rules(lab_in, LABEL_RULES)
 valid_l.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(T["silver_labels"])
 
 # COMMAND ----------
+
 # MAGIC %md ## 3. Patients - split into **de-identified** (for ML) and **PHI** (restricted) tables
 # MAGIC HIPAA Safe-Harbor style: drop names/SSN/phone, keep only birth *year*, 3-digit ZIP; ages > 89 are capped later.
 # MAGIC The ML team never needs the PHI table.
@@ -133,6 +141,7 @@ pat_bad.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(T[
  .write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(T["silver_patients_phi"]))
 
 # COMMAND ----------
+
 # MAGIC %md ### 3b. Attach column masks, row filter, tags (Unity Catalog)
 
 # COMMAND ----------
@@ -156,6 +165,7 @@ try_sql(f"COMMENT ON TABLE {T['silver_encounters']} IS 'Validated inpatient enco
 try_sql(f"COMMENT ON COLUMN {T['silver_encounters']}.los_days IS 'Length of stay in days (1-365)'")
 
 # COMMAND ----------
+
 # MAGIC %md ## 4. Gold - labelled encounters (only where the 30-day outcome window has closed)
 # MAGIC Using un-matured labels would teach the model that recent patients "never come back" - a classic leakage bug.
 
@@ -169,6 +179,7 @@ gold = (spark.table(T["silver_encounters"])
 print("gold_labeled_encounters:", spark.table(T["gold_labeled"]).count())
 
 # COMMAND ----------
+
 # MAGIC %md ## 5. Persist DQ metrics (trend them in a dashboard / alert on spikes) + table maintenance
 
 # COMMAND ----------

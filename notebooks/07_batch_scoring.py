@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 07 · Batch inference (daily discharge scoring)
 # MAGIC Scores recently discharged patients with the **Champion** model using `fe.score_batch` - features are looked up
@@ -7,6 +11,13 @@
 # MAGIC a governed worklist view.
 
 # COMMAND ----------
+
+# DBTITLE 1,Install batch-scoring dependencies
+# MAGIC %pip install databricks-feature-engineering lightgbm --quiet
+# MAGIC dbutils.library.restartPython()  # required for newly installed packages to be importable; run BEFORE the config cell so the restart doesn't clear its setup
+
+# COMMAND ----------
+
 # MAGIC %run ./00_config
 
 # COMMAND ----------
@@ -23,6 +34,7 @@ thr_high, thr_med = float(champ.tags["decision_threshold"]), float(champ.tags["m
 print(f"Champion v{champ.version}  high>={thr_high:.4f}  medium>={thr_med:.4f}")
 
 # COMMAND ----------
+
 # MAGIC %md ## 1. Select encounters to score
 # MAGIC "Today" in the simulation = latest discharge in silver. We score the last `window_days` and skip anything
 # MAGIC already scored by this model version (idempotent re-runs).
@@ -50,18 +62,22 @@ n = to_score.count()
 print(f"as_of={as_of}  rows to score: {n:,}")
 
 # COMMAND ----------
+
 # MAGIC %md ## 2. Score → normalise → merge
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 7
 if n > 0:
-    scored = fe.score_batch(model_uri=f"models:/{MODEL_NAME}@Champion", df=to_score)
+    scored = fe.score_batch(model_uri=f"models:/{MODEL_NAME}@Champion", df=to_score,
+                            result_type="array<double>")   # without this, the predict_proba output collapses to p0 (the negative-class probability)
     log = to_inference_log(scored, MODEL_NAME, champ.version, thr_high, thr_med)
     upsert(spark, log, T["inference_log"], keys=["encounter_id", "model_version"])
     print("merged into", T["inference_log"])
 display(spark.table(T["inference_log"]).groupBy("risk_tier").count())
 
 # COMMAND ----------
+
 # MAGIC %md ## 3. Care-management worklist view (what the business actually consumes)
 # MAGIC Joins the restricted PHI table - names are **masked** unless the caller is in `phi_admins`.
 
@@ -84,6 +100,7 @@ for stmt in [f"GRANT SELECT ON VIEW {FQ}.vw_care_mgmt_worklist TO `care_mgmt_app
 display(spark.sql(f"SELECT * FROM {FQ}.vw_care_mgmt_worklist ORDER BY risk_score DESC LIMIT 20"))
 
 # COMMAND ----------
+
 # MAGIC %md ## 4. Dashboard ideas (AI/BI dashboard on `gold_inference_log`)
 # MAGIC * HIGH-risk volume by hospital and day · risk-score distribution vs baseline · outcomes by tier once labels land
 # MAGIC * Precision@top-10% trend (from `monitoring_performance`) · PSI heatmap (from `monitoring_feature_drift`)

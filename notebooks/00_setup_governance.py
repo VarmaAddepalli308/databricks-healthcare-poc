@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 00 · Setup: Unity Catalog, security & PHI governance
 # MAGIC Covers: catalog/schema/volumes · RBAC grants · column masks · row filters · tagging ·
@@ -9,9 +13,11 @@
 # MAGIC > `data_engineers`, `data_scientists`, `ml_engineers`, `phi_admins`, `care_mgmt_apps`
 
 # COMMAND ----------
+
 # MAGIC %run ./00_config
 
 # COMMAND ----------
+
 # MAGIC %md ## 1. Catalog, schema, volumes
 
 # COMMAND ----------
@@ -23,6 +29,7 @@ for v, c in [("raw", "Landing zone for hospital feeds"), ("checkpoints", "Auto L
     spark.sql(f"CREATE VOLUME IF NOT EXISTS {FQ}.{v} COMMENT '{c}'")
 
 # COMMAND ----------
+
 # MAGIC %md ## 2. Role-based access control (least privilege)
 # MAGIC | Group | Can do |
 # MAGIC |---|---|
@@ -51,6 +58,7 @@ safe_sql(f"GRANT USE SCHEMA ON SCHEMA {FQ} TO `care_mgmt_apps`")
 # care-management apps only get the predictions/worklist objects (granted in notebook 07)
 
 # COMMAND ----------
+
 # MAGIC %md ## 3. Column masks & row filters (created here, attached in notebook 02 once tables exist)
 # MAGIC * **Column mask** - direct identifiers (name, SSN, DOB, phone, ZIP) are redacted unless the caller is in `phi_admins`.
 # MAGIC * **Row filter** - hospital-level data isolation: a user only sees rows of hospitals they are entitled to.
@@ -86,6 +94,7 @@ RETURN is_account_group_member('phi_admins') OR is_account_group_member('ml_engi
 """)
 
 # COMMAND ----------
+
 # MAGIC %md ## 4. Governance audit queries (system tables) - HIPAA "who accessed what"
 # MAGIC Requires system tables to be enabled by an account admin.
 
@@ -109,6 +118,7 @@ WHERE target_table_full_name LIKE '{CATALOG}.{SCHEMA}.%' ORDER BY event_time DES
 print("Audit & lineage queries ready (see README -> Governance).")
 
 # COMMAND ----------
+
 # MAGIC %md ## 5. Account-level controls to enable for real PHI (outside this notebook)
 # MAGIC * Sign a **BAA** with Databricks + your cloud; enable the **Compliance Security Profile (HIPAA)**
 # MAGIC * Customer-managed keys for workspace storage / managed services; private link, no public IPs

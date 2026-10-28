@@ -1,10 +1,15 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 03 · Exploratory data analysis & data profiling
 # MAGIC Goals: understand the target, find data problems *before* modelling, decide on split strategy and metrics,
 # MAGIC and write down leakage risks. Figures are logged to MLflow so the analysis is reproducible/auditable.
 
 # COMMAND ----------
+
 # MAGIC %run ./00_config
 
 # COMMAND ----------
@@ -18,15 +23,18 @@ print(f"rows={df.count():,}  columns={len(df.columns)}")
 display(df.limit(5))
 
 # COMMAND ----------
+
 # MAGIC %md ## 1. Profile (Databricks built-in) + null report
 
 # COMMAND ----------
 
-dbutils.data.summarize(df.drop("_ingest_ts"))   # interactive profile with histograms
+# DBTITLE 1,Cell 5
+display(df.drop("_ingest_ts"))   # interactive profile: click the + / Profile option in the results view for histograms
 nulls = df.select([F.round(F.avg(F.col(c).isNull().cast("int")) * 100, 3).alias(c) for c in df.columns])
 display(nulls)
 
 # COMMAND ----------
+
 # MAGIC %md ## 2. Target: prevalence, class balance, trend over time
 
 # COMMAND ----------
@@ -44,6 +52,7 @@ with mlflow.start_run(run_name="eda"):
     mlflow.log_metric("prevalence", prev)
 
 # COMMAND ----------
+
 # MAGIC %md ## 3. Segment analysis - where is risk concentrated?
 
 # COMMAND ----------
@@ -58,6 +67,7 @@ by_los = (df.withColumn("los_bucket", F.when(F.col("los_days") <= 2, "1-2").when
 display(by_los)
 
 # COMMAND ----------
+
 # MAGIC %md ## 4. Patient-level structure - important for splitting
 # MAGIC Many patients have several encounters. A *random* row split would put the same patient in train and test
 # MAGIC (optimistic metrics). We therefore split **by time** (train < 2024, validate H1-2024, test H2-2024).
@@ -69,6 +79,7 @@ display(per_patient.groupBy(F.when(F.col("count") >= 10, "10+").otherwise(F.col(
         .count().orderBy("encounters_per_patient"))
 
 # COMMAND ----------
+
 # MAGIC %md ## 5. Bias / fairness baseline - outcome rates by protected attributes
 # MAGIC (Race/ethnicity is **not** a model input; we only audit with it.)
 
@@ -79,6 +90,7 @@ for c in ["gender", "race_ethnicity", "insurance_type"]:
     display(aud.groupBy(c).agg(F.count("*").alias("n"), F.round(F.avg("readmit_30d"), 4).alias("readmit_rate")))
 
 # COMMAND ----------
+
 # MAGIC %md ## 6. Numeric relationships (sampled to the driver)
 
 # COMMAND ----------
@@ -90,6 +102,7 @@ ax.set_xticks(range(len(corr))); ax.set_xticklabels(corr.columns, rotation=45, h
 plt.colorbar(im); plt.tight_layout(); plt.show()
 
 # COMMAND ----------
+
 # MAGIC %md ## 7. Findings → decisions (write these down, they go in the model card)
 # MAGIC | Finding | Decision |
 # MAGIC |---|---|

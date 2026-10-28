@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 10 · Automated retraining policy
 # MAGIC Retraining is triggered by **any** of:
@@ -11,6 +15,7 @@
 # MAGIC in prod) before replacing the Champion. A cool-down avoids retrain storms.
 
 # COMMAND ----------
+
 # MAGIC %run ./00_config
 
 # COMMAND ----------
@@ -35,6 +40,7 @@ else:  # derive from tables if not passed in
 print("decision:", decision)
 
 # COMMAND ----------
+
 # MAGIC %md ## Cool-down + trigger
 
 # COMMAND ----------
