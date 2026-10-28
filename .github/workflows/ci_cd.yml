@@ -1,0 +1,57 @@
+name: ci-cd
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+  DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}        # service principal (OAuth M2M) - no personal tokens
+  DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check src tests
+      - run: pytest -q
+
+  dev-integration:
+    needs: test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - run: databricks bundle validate -t dev
+      - run: databricks bundle deploy -t dev --var git_sha=${{ github.sha }}
+      - run: databricks bundle run setup_data -t dev                       # 100k rows in dev
+      - run: databricks bundle run readmission_training_pipeline -t dev    # full DAG as integration test
+
+  staging:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - run: databricks bundle deploy -t staging --var git_sha=${{ github.sha }}
+      - run: databricks bundle run setup_data -t staging
+      - run: databricks bundle run readmission_training_pipeline -t staging
+
+  prod:
+    needs: staging
+    runs-on: ubuntu-latest
+    environment: production          # configure "required reviewers" on this environment = human approval gate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - run: databricks bundle deploy -t prod --var git_sha=${{ github.sha }}
+      # The model itself is promoted by notebook 06 (gates + approved=true), not by the pipeline.

@@ -1,0 +1,147 @@
+# Databricks Asset Bundle: infrastructure-as-code for jobs across dev / staging / prod.
+#   databricks bundle validate -t dev
+#   databricks bundle deploy   -t dev
+#   databricks bundle run setup_data -t dev          # generate + ingest synthetic data
+#   databricks bundle run readmission_training_pipeline -t dev
+bundle:
+  name: healthcare_readmission_poc
+
+variables:
+  catalog:        { default: health_poc_dev }
+  schema:         { default: readmission }
+  n_encounters:   { default: "1000000" }
+  # Verify these two for your cloud/workspace: node type and a current ML runtime
+  node_type_id:   { default: i3.xlarge }          # Azure: Standard_DS4_v2 / GCP: n2-highmem-4
+  ml_runtime:     { default: 16.4.x-cpu-ml-scala2.12 }
+  alert_email:    { default: ml-team@example.com }
+  git_sha:        { default: local }
+
+targets:
+  dev:
+    mode: development
+    default: true
+    variables: { catalog: health_poc_dev, n_encounters: "100000" }   # small & cheap while iterating
+  staging:
+    mode: production
+    variables: { catalog: health_poc_stg }
+    workspace: { root_path: "/Workspace/Shared/.bundle/${bundle.name}/staging" }
+  prod:
+    mode: production
+    variables: { catalog: health_poc_prod }
+    workspace: { root_path: "/Workspace/Shared/.bundle/${bundle.name}/prod" }
+    # run_as: { service_principal_name: "<application-id>" }        # jobs in prod run as a service principal
+
+resources:
+  jobs:
+    setup_data:
+      name: "[${bundle.target}] setup_governance_and_data"
+      parameters:
+        - { name: catalog, default: "${var.catalog}" }
+        - { name: schema, default: "${var.schema}" }
+        - { name: env, default: "${bundle.target}" }
+        - { name: n_encounters, default: "${var.n_encounters}" }
+        - { name: n_patients, default: "300000" }
+      job_clusters:
+        - job_cluster_key: etl
+          new_cluster: &etl_cluster
+            spark_version: ${var.ml_runtime}
+            node_type_id: ${var.node_type_id}
+            num_workers: 4
+            data_security_mode: SINGLE_USER
+      tasks:
+        - { task_key: governance, job_cluster_key: etl, notebook_task: { notebook_path: ./notebooks/00_setup_governance.py } }
+        - task_key: generate_data
+          depends_on: [{ task_key: governance }]
+          job_cluster_key: etl
+          notebook_task: { notebook_path: ./notebooks/01_generate_synthetic_data.py }
+
+    readmission_training_pipeline:
+      name: "[${bundle.target}] readmission_training_pipeline"
+      description: ingest -> features -> train -> validate -> (gate) -> deploy -> score -> monitor
+      parameters:
+        - { name: catalog, default: "${var.catalog}" }
+        - { name: schema, default: "${var.schema}" }
+        - { name: env, default: "${bundle.target}" }
+        - { name: git_sha, default: "${var.git_sha}" }
+        - { name: trigger_reason, default: scheduled }
+        - { name: approved, default: "false" }
+      schedule:
+        quartz_cron_expression: "0 0 2 1 * ?"      # monthly retrain, 02:00 on the 1st
+        timezone_id: Asia/Kolkata
+        pause_status: PAUSED                        # un-pause in prod once validated
+      email_notifications: { on_failure: ["${var.alert_email}"] }
+      max_concurrent_runs: 1
+      job_clusters:
+        - job_cluster_key: ml
+          new_cluster:
+            spark_version: ${var.ml_runtime}
+            node_type_id: ${var.node_type_id}
+            num_workers: 4
+            data_security_mode: SINGLE_USER
+      tasks:
+        - { task_key: ingest_transform, job_cluster_key: ml, max_retries: 1, notebook_task: { notebook_path: ./notebooks/02_bronze_silver_gold.py } }
+        - task_key: features
+          depends_on: [{ task_key: ingest_transform }]
+          job_cluster_key: ml
+          notebook_task: { notebook_path: ./notebooks/04_feature_engineering.py }
+        - task_key: train
+          depends_on: [{ task_key: features }]
+          job_cluster_key: ml
+          notebook_task: { notebook_path: ./notebooks/05_train_and_register.py }
+        - task_key: validate_promote
+          depends_on: [{ task_key: train }]
+          job_cluster_key: ml
+          notebook_task: { notebook_path: ./notebooks/06_validate_and_promote.py, base_parameters: { approved: "{{job.parameters.approved}}" } }
+        - task_key: promoted_gate
+          depends_on: [{ task_key: validate_promote }]
+          condition_task:
+            op: EQUAL_TO
+            left: "{{tasks.validate_promote.values.promoted}}"
+            right: "true"
+        - task_key: deploy_endpoint
+          depends_on: [{ task_key: promoted_gate, outcome: "true" }]
+          job_cluster_key: ml
+          notebook_task: { notebook_path: ./notebooks/08_deploy_realtime_endpoint.py }
+        - task_key: batch_score
+          depends_on: [{ task_key: deploy_endpoint }]
+          job_cluster_key: ml
+          notebook_task: { notebook_path: ./notebooks/07_batch_scoring.py }
+
+    readmission_scoring_pipeline:
+      name: "[${bundle.target}] readmission_scoring_pipeline"
+      description: daily - ingest new data, refresh features, score, monitor, maybe trigger retrain
+      parameters:
+        - { name: catalog, default: "${var.catalog}" }
+        - { name: schema, default: "${var.schema}" }
+        - { name: env, default: "${bundle.target}" }
+      schedule: { quartz_cron_expression: "0 0 6 * * ?", timezone_id: Asia/Kolkata, pause_status: PAUSED }
+      email_notifications: { on_failure: ["${var.alert_email}"] }
+      # Alternative: event-driven start when hospitals drop files
+      # trigger: { file_arrival: { url: "/Volumes/${var.catalog}/${var.schema}/raw/encounters/" } }
+      job_clusters:
+        - job_cluster_key: ml
+          new_cluster:
+            spark_version: ${var.ml_runtime}
+            node_type_id: ${var.node_type_id}
+            num_workers: 2
+            data_security_mode: SINGLE_USER
+      tasks:
+        - { task_key: ingest_transform, job_cluster_key: ml, notebook_task: { notebook_path: ./notebooks/02_bronze_silver_gold.py } }
+        - task_key: features
+          depends_on: [{ task_key: ingest_transform }]
+          job_cluster_key: ml
+          notebook_task: { notebook_path: ./notebooks/04_feature_engineering.py }
+        - task_key: score
+          depends_on: [{ task_key: features }]
+          job_cluster_key: ml
+          notebook_task: { notebook_path: ./notebooks/07_batch_scoring.py }
+        - task_key: monitor
+          depends_on: [{ task_key: score }]
+          job_cluster_key: ml
+          notebook_task: { notebook_path: ./notebooks/09_monitoring.py }
+        - task_key: retrain_check
+          depends_on: [{ task_key: monitor }]
+          job_cluster_key: ml
+          notebook_task:
+            notebook_path: ./notebooks/10_retrain_trigger.py
+            base_parameters: { training_job_name: "[${bundle.target}] readmission_training_pipeline" }

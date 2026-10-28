@@ -1,0 +1,7 @@
+pyspark==3.5.*
+delta-spark==3.2.*
+pytest
+numpy
+pandas
+scikit-learn
+ruff
